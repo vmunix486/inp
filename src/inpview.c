@@ -366,9 +366,30 @@ int main(int argc, char *argv[])
                 if (ev.type == SDL_QUIT) running = 0;
                 if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) running = 0;
             }
-            SDL_RenderClear(ren);
-            SDL_RenderCopy(ren, tex, NULL, NULL);
-            SDL_RenderPresent(ren);
+            {
+                int win_w, win_h;
+                int dst_w, dst_h;
+                SDL_Rect dst;
+
+                SDL_GetRendererOutputSize(ren, &win_w, &win_h);
+
+                if ((float)hdr.width / hdr.height > (float)win_w / win_h) {
+                    dst_w = win_w;
+                    dst_h = (int)((float)win_w * hdr.height / hdr.width);
+                } else {
+                    dst_h = win_h;
+                    dst_w = (int)((float)win_h * hdr.width / hdr.height);
+                }
+
+                dst.x = (win_w - dst_w) / 2;
+                dst.y = (win_h - dst_h) / 2;
+                dst.w = dst_w;
+                dst.h = dst_h;
+
+                SDL_RenderClear(ren);
+                SDL_RenderCopy(ren, tex, NULL, &dst);
+                SDL_RenderPresent(ren);
+            }
             SDL_Delay(16);
         }
     }
