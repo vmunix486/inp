@@ -1,6 +1,5 @@
 /* inpview.c -- reference viewer for the INP image format (INI-based images)
  * Spec:  https://slow.c2dthinkcentre.com/articles/inp.html
- * Build: gcc -std=c89 -Wall -Wextra -O2 inpview.c -o inpview $(sdl2-config --cflags --libs)
  * Usage: inpview image.inp
  *        xzcat image.inp.xz | inpview -
  *

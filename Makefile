@@ -9,5 +9,10 @@ img2inp:
 inpview:
 	$(CC) $(CFLAGS) src/inpview.c -o inpview $(shell sdl2-config --cflags --libs)
 
+update:
+	rm -fv docs/inp.html src/stb_image.h
+	cd docs && wget http://slow.c2dthinkcentre.com/articles/inp.html
+	cd src && wget https://github.com/nothings/stb/raw/refs/heads/master/stb_image.h
+
 clean:
 	rm -f img2inp inpview

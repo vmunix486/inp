@@ -26,7 +26,7 @@ code {
 	<body style="background-color: gray;">
 		<div id="top">
 			<h1>INP: An INI image format</h1>
-			<p>by vmunix, started on 7/31/26, finished later the same day.</p>
+			<p>by vmunix, started on 7/31/26</p>
 		</div>
 		<br>
 
@@ -136,6 +136,34 @@ end
 			<p>If you are making an image viewer that uses this, if there are any missing pixels within the image itself, what I think you should do is warn the user, and still show the picture, but replace the missing pixels with bright pink ones, a la the <a href="https://developer.valvesoftware.com/wiki/Missing_content">Source Engine</a> and <a href="https://minecraft.wiki/w/Missing_textures_and_models#Missing_texture">Minecraft</a>. Another approach you could take is that you could randomly select one of the surrounding pixels around the missing pixel, and just copy it over to the missing one. Or you could just do nothing. I don't know, I'm not your dad, do as you want.</p>
 
 			<p>One last thing I want to say is that if you are making anything using this format, you should credit me either by name or link here. You can give credit to either my screen name, <a href="https://en.wikipedia.org/wiki/History_of_the_Berkeley_Software_Distribution#3BSD:~:text=3BSD%20was%20also%20alternatively%20called%20Virtual%20VAX%2FUNIX%20or%20VMUNIX%20%28for%20Virtual%20Memory%20Unix%29%2C%20and%20BSD%20kernel%20images%20were%20normally%20called%20%2Fvmunix%20until%204%2E4BSD">vmunix</a>, or my "real" name, <a href="https://phish.net/song/run-like-an-antelope/lyrics#:~:text=Marco%20Esquandolas">Marco Esquandolas</a>.</p>
+		</div>
+
+		<div id="amendment1">
+			<h2>Amendment 1</h2>
+			<p>The first amendment to this spec, only like 3 hours after the first spec was finished.</p>
+			<p>What is the first amendment to the INP spec, you might be wondering. Well it's to do with color. I was converting a few images from PNG to INP, when I realized that one of the images was only shades of black and white. I thought about this, and I realized that it would be very inneficient to have all 6 (8 if you have alpha enabled) characters, when it could only be 2 characters for 256 colors, or shades of gray. Here is the function that was added to the INP spec.</p>
+
+			<p><code>colors</code> - The amount of colors to use. Options for this are the following:</p>
+			<ul style="list-style-type: disc;">
+				<li><code>16bit</code> - The default 16-bit color, that uses 6 characters. Alpha is supported.</li>
+				<li><code>256color</code> - 256 color, uses 2 characters, from <code>00</code> to <code>FF</code>. Alpha is not supported.</li>
+				<li><code>256gray</code> - 256 shades of gray. Uses 2 characters, from <code>00</code> to <code>FF</code>. Alpha is not supported.</li>
+				<li><code>16color</code> - 16 colors. Uses <code>00</code> to <code>10</code>. Alpha is not supported.</li>
+				<li><code>16gray</code> - 16 shades of gray. Uses <code>00</code> to <code>10</code>. Alpha is not supported.</li>
+				<li><code>bw</code> - Black and white. Litterally <code>0</code> or <code>1</code>. Alpha is not supported.</li>
+			</ul>
+
+			<p><code>colors</code> is optional, and if it is not set, it will use the default 6-8 character color encoding.</p>
+
+			<p><i>But vmunix! How are you supposed to handle the color palettes for the lower colors?</i></p>
+
+			<p>Do not fret, I have an idea. For my converter, <i>img2inp</i>, I will first implement the default VGA 256 color palette. Once I have that ironed out, I will then try to implement getting the most common colors from an image, then using that for the colors, and this will be extended down to 16 colors as well. Both options will be available through flags. For the greyscale images, I will try to dither. Dither, dither, dither.</p>
+
+			<p>And that brings me to the other function added to INP files. If there is 256 color or 16 colors specified, there will be a new section opened up, <code>[Palette]</code>. Within the <code>[Palette]</code> section, there will be <code>c1</code> through <code>c255</code>, or <code>c1</code> through <code>c16</code> for 16 color. How it will work is that if you were to use color <code>FF</code> in the <code>[Picture]</code> section, it will get mapped to the color defined by <code>c255</code> in <code>[Palette]</code>.</p>
+
+			<h3>Broken files</h3>
+
+			<p>If an INP picture has 16 colors specified, but there is up to <code>c255</code> in the <code>[Palette]</code> section, then just ignore the rest of the colors past 16. If 256 colors is specified, but there is only up to <code>c16</code>, then throw an error and exit. If there is a <code>[Palette]</code> section in a color format that doesn't have the <code>[Palette]</code> section opened up, then ignore it. If <code>alpha</code> is enabled on a color palette that doesn't support it, then ignore alpha. Finally, it should go without saying, but if any of this occurs, then alert the user.</p>
 		</div>
 
 		<p><a href="/articles.html">Back to the articles listing</a></p>
