@@ -11,3 +11,7 @@
  - Pure Nano-X
  - MS-DOS
  - Linux framebuffer
+ - Web (Javascript or WASM)
+ - Windows (Win32) (C++)
+ - MacOS X (Objective C)
+ - MacOS Classic (C?)
