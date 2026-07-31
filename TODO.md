@@ -2,7 +2,7 @@
 
  - Add support for more platforms
  - Add gallery support
- - Add support for lower-bit color to INP spec (16-bit color (already default), 256-color, 16 color, 16 color b/w, 2-color b/w)
+ - Add support for detecting colors in a picture and changing the palette based on common colors within an image
 
 ## Platforms
 

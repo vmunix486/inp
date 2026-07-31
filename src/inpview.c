@@ -11,13 +11,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { SEC_NONE, SEC_GENERAL, SEC_PICTURE };
+enum { SEC_NONE, SEC_GENERAL, SEC_PICTURE, SEC_PALETTE };
+enum { MODE_16BIT, MODE_256COLOR, MODE_256GRAY, MODE_16COLOR, MODE_16GRAY, MODE_BW };
 
 typedef struct {
     int width;
     int height;
     int alpha;
+    int colors;
     Uint8 bg_r, bg_g, bg_b, bg_a;
+    Uint8 palette[256][4];
+    int palette_count;
 } InpHeader;
 
 /* Converts a single hex digit character to its numeric value, -1 if invalid. */
@@ -66,6 +70,96 @@ static int parse_color(const char *hex, int alpha_enabled,
         if (rv < 0 || gv < 0 || bv < 0) return -1;
         *r = (Uint8)rv; *g = (Uint8)gv; *b = (Uint8)bv; *a = 255;
         return 0;
+    }
+
+    return -1;
+}
+
+/* Initializes the default VGA 256-color palette. */
+static void init_vga_palette(Uint8 palette[256][4])
+{
+    static const Uint8 vals[6] = {0, 95, 135, 175, 215, 255};
+    int i, r, g, b;
+
+    palette[0][0] = 0;   palette[0][1] = 0;   palette[0][2] = 0;
+    palette[1][0] = 0;   palette[1][1] = 0;   palette[1][2] = 170;
+    palette[2][0] = 0;   palette[2][1] = 170; palette[2][2] = 0;
+    palette[3][0] = 0;   palette[3][1] = 170; palette[3][2] = 170;
+    palette[4][0] = 170; palette[4][1] = 0;   palette[4][2] = 0;
+    palette[5][0] = 170; palette[5][1] = 0;   palette[5][2] = 170;
+    palette[6][0] = 170; palette[6][1] = 85;  palette[6][2] = 0;
+    palette[7][0] = 170; palette[7][1] = 170; palette[7][2] = 170;
+    palette[8][0] = 85;  palette[8][1] = 85;  palette[8][2] = 85;
+    palette[9][0] = 85;  palette[9][1] = 85;  palette[9][2] = 255;
+    palette[10][0] = 85; palette[10][1] = 255; palette[10][2] = 85;
+    palette[11][0] = 85; palette[11][1] = 255; palette[11][2] = 255;
+    palette[12][0] = 255; palette[12][1] = 85; palette[12][2] = 85;
+    palette[13][0] = 255; palette[13][1] = 85; palette[13][2] = 255;
+    palette[14][0] = 255; palette[14][1] = 255; palette[14][2] = 85;
+    palette[15][0] = 255; palette[15][1] = 255; palette[15][2] = 255;
+
+    i = 16;
+    for (r = 0; r < 6; r++) {
+        for (g = 0; g < 6; g++) {
+            for (b = 0; b < 6; b++) {
+                palette[i][0] = vals[r];
+                palette[i][1] = vals[g];
+                palette[i][2] = vals[b];
+                i++;
+            }
+        }
+    }
+
+    for (i = 0; i < 24; i++) {
+        Uint8 gray = (Uint8)(8 + i * 10);
+        palette[232 + i][0] = gray;
+        palette[232 + i][1] = gray;
+        palette[232 + i][2] = gray;
+    }
+
+    for (i = 0; i < 256; i++) palette[i][3] = 255;
+}
+
+/* Parses a pixel value string based on the active color mode.
+ * Returns 0 on success, -1 on invalid input. */
+static int parse_pixel(const char *hex, int color_mode, const InpHeader *hdr,
+                       Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a)
+{
+    int len, idx;
+
+    len = strlen(hex);
+
+    switch (color_mode) {
+    case MODE_16BIT:
+        return parse_color(hex, hdr->alpha, r, g, b, a);
+
+    case MODE_256COLOR:
+    case MODE_16COLOR:
+        if (len != 2) return -1;
+        idx = hex_byte(hex);
+        if (idx < 0 || idx >= hdr->palette_count) return -1;
+        *r = hdr->palette[idx][0];
+        *g = hdr->palette[idx][1];
+        *b = hdr->palette[idx][2];
+        *a = 255;
+        return 0;
+
+    case MODE_256GRAY:
+    case MODE_16GRAY:
+        if (len != 2) return -1;
+        idx = hex_byte(hex);
+        if (idx < 0) return -1;
+        *r = (Uint8)idx;
+        *g = (Uint8)idx;
+        *b = (Uint8)idx;
+        *a = 255;
+        return 0;
+
+    case MODE_BW:
+        if (len != 1) return -1;
+        if (hex[0] == '0') { *r = *g = *b = 0; *a = 255; return 0; }
+        if (hex[0] == '1') { *r = *g = *b = 255; *a = 255; return 0; }
+        return -1;
     }
 
     return -1;
@@ -185,6 +279,55 @@ static void scan_general(const char *data, size_t data_len, InpHeader *hdr, int 
                         hdr->bg_r = r; hdr->bg_g = g; hdr->bg_b = b; hdr->bg_a = a;
                         *have_bg = 1;
                     }
+                } else if (strcmp(tok, "colors") == 0) {
+                    if (strcmp(eq + 1, "16bit") == 0) hdr->colors = MODE_16BIT;
+                    else if (strcmp(eq + 1, "256color") == 0) hdr->colors = MODE_256COLOR;
+                    else if (strcmp(eq + 1, "256gray") == 0) hdr->colors = MODE_256GRAY;
+                    else if (strcmp(eq + 1, "16color") == 0) hdr->colors = MODE_16COLOR;
+                    else if (strcmp(eq + 1, "16gray") == 0) hdr->colors = MODE_16GRAY;
+                    else if (strcmp(eq + 1, "bw") == 0) hdr->colors = MODE_BW;
+                }
+            }
+        }
+        tok = strtok(NULL, "\n");
+    }
+
+    free(copy);
+}
+
+/* Pass 2b: scan [Palette] section and fill palette entries. */
+static void scan_palette(const char *data, size_t data_len, InpHeader *hdr)
+{
+    char *copy;
+    char *tok;
+    char *eq;
+    int section;
+
+    copy = (char *)malloc(data_len + 1);
+    if (!copy) return;
+    memcpy(copy, data, data_len + 1);
+
+    section = SEC_NONE;
+    tok = strtok(copy, "\n");
+    while (tok) {
+        chomp(tok);
+        if (tok[0] == '[') {
+            if (strcmp(tok, "[Palette]") == 0) section = SEC_PALETTE;
+            else section = SEC_NONE;
+        } else if (section == SEC_PALETTE) {
+            eq = strchr(tok, '=');
+            if (eq && tok[0] == 'c') {
+                int idx = atoi(tok + 1);
+                if (idx >= 0 && idx < 256) {
+                    Uint8 r, g, b, a;
+                    if (parse_color(eq + 1, 0, &r, &g, &b, &a) == 0) {
+                        hdr->palette[idx][0] = r;
+                        hdr->palette[idx][1] = g;
+                        hdr->palette[idx][2] = b;
+                        hdr->palette[idx][3] = 255;
+                        if (idx + 1 > hdr->palette_count)
+                            hdr->palette_count = idx + 1;
+                    }
                 }
             }
         }
@@ -227,7 +370,7 @@ static int fill_pixels(const char *data, size_t data_len, const InpHeader *hdr, 
                     && ix >= 1 && ix <= hdr->width
                     && iy >= 1 && iy <= hdr->height) {
                     Uint8 r, g, b, a;
-                    if (parse_color(eq + 1, hdr->alpha, &r, &g, &b, &a) == 0) {
+                    if (parse_pixel(eq + 1, hdr->colors, hdr, &r, &g, &b, &a) == 0) {
                         int idx = (iy - 1) * hdr->width + (ix - 1);
                         pixels[idx * 4 + 0] = r;
                         pixels[idx * 4 + 1] = g;
@@ -283,10 +426,32 @@ int main(int argc, char *argv[])
     hdr.width = 0;
     hdr.height = 0;
     hdr.alpha = 0;
+    hdr.colors = MODE_16BIT;
     hdr.bg_r = 255; hdr.bg_g = 0; hdr.bg_b = 255; hdr.bg_a = 255; /* magenta */
+    hdr.palette_count = 0;
     have_bg = 0;
 
+    init_vga_palette(hdr.palette);
+
     scan_general(data, data_len, &hdr, &have_bg);
+
+    scan_palette(data, data_len, &hdr);
+
+    if (hdr.colors == MODE_16COLOR && hdr.palette_count < 16) {
+        fprintf(stderr, "inpview: warning: 16color mode expects 16 palette entries (found %d), using defaults\n",
+                hdr.palette_count);
+        hdr.palette_count = 16;
+    }
+    if (hdr.colors == MODE_256COLOR && hdr.palette_count < 256) {
+        fprintf(stderr, "inpview: warning: 256color mode expects 256 palette entries (found %d), using defaults\n",
+                hdr.palette_count);
+        hdr.palette_count = 256;
+    }
+    if ((hdr.colors == MODE_16BIT || hdr.colors == MODE_256GRAY
+         || hdr.colors == MODE_16GRAY || hdr.colors == MODE_BW)
+        && hdr.palette_count > 0) {
+        fprintf(stderr, "inpview: warning: [Palette] section ignored for this color mode\n");
+    }
 
     if (hdr.width <= 0 || hdr.height <= 0) {
         fprintf(stderr, "inpview: invalid or missing width/height\n");
