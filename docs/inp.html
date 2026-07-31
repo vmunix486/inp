@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+
+
+
+<html>
+	<head>
+<style>
+pre {
+  background-color: #0f0f0f;
+  color: green;
+  font-family: 'Courier New', Courier, monospace;
+  text-align: left;
+}
+
+code {
+	background-color: #0f0f0f;
+	color: green;
+	font-family: 'Courier New', Courier, monospace;
+	text-align: left;
+}
+</style>
+
+		<title>INP: An INI image format</title>
+	</head>
+
+	<body style="background-color: gray;">
+		<div id="top">
+			<h1>INP: An INI image format</h1>
+			<p>by vmunix, started on 7/31/26, finished later the same day.</p>
+		</div>
+		<br>
+
+		<div id="summary">
+			<h2>Summary</h2>
+			<p>INP is an image format that I have thought up of over the course of a week or so. It is an image format that uses INI files, and is very simple in design to make it easy for developers to implement it for all types of operating systems, display methods, and hardware.</p>
+		</div>
+
+		<div id="files">
+			<h2>The files themselves</h2>
+
+			<p>A normal INI file looks something like this:</p>
+
+
+			<pre>
+[owner]
+name = John Doe
+organization = Acme Widgets Inc.
+				
+[database]
+server = 192.0.2.62
+port = 143
+file = "payroll.dat"
+			</pre>
+
+			<p>INI files are very simple, they are in the format of <code>variable = string</code>, making them one of the easiest ways to store configuration or settings for programs. Another part of INI files is that they can have sections in them, using the syntax <code>[section]</code>.</p>
+
+			<p>INP files follow this same convention of <code>variable=string</code>, but there are a few minute differences. One of the first things that differentiate INI files and INP files is that there are only 2 sections in an INP file, the first one is labeled "General" and the second one is labeled "Picture".</p>
+			<p>Inside of the General section, there is information about the image, such as information about the width and height, as well as info for the picture itself, such as the Name, Creator, and Creation date of the picture, as well as a Note for the image itself, among other things that can go into the General section.</p>
+
+			<p>In the "Picture" section, is the actual data for the image itself. The data is in the form of X coordinate, Y coordinate equals color. The color will always be in HTML hex, without a leading "0x" in front of it. There can optionally be Alpha in the color as well, but it needs to be enabled within <code>[General]</code>.</p>
+
+			<p>Here is an example of a very simple INP file.</p>
+
+			<pre>
+[General]
+width=3
+height=1
+
+[Picture]
+x1y1=ff0000
+x2y1=00ff00
+x3y1=0000ff
+			</pre>
+
+			<p>When viewed, this picture has, well, 3 pixels horizontally. The one on the left is red, the one in the middle is green, and the one on the right is blue.</p>
+
+			<p>This is where simplicity comes from. For the coder, this image format is very simple to write a viewer for, or even a INP maker. As an example for how easy it is to make a viewer for this format, I have made a very simple one in my flavor of <a href="https://lua.org">Lua</a>, <a href="https://github.com/vmunix486/blua">BLua</a>, with <a href="https://raylib.com">Raylib</a>.</p>
+
+			<pre>
+local screenWidth = 800
+local screenHeight = 600
+
+local file = io.open("image.inp", "r")
+if not file then
+        io.close(file)
+        print("Could not load file")
+        os.exit(1)
+else
+        io.close(file)
+end
+
+local img = ini.parse("image.inp")
+
+raylib.SetConfigFlags(FLAG_WINDOW_RESIZABLE)
+raylib.InitWindow(screenWidth, screenHeight, "INI image viewer")
+raylib.SetTargetFPS(60)
+
+while not raylib.WindowShouldClose() do
+        raylib.BeginDrawing()
+                raylib.ClearBackground(GRAY)
+                for y = 1, img.General.height do
+                        for x = 1, img.General.width do
+                                local key = "x" .. x .. "y" .. y
+                                local hex = img.Picture[key] or "ff00ff"
+
+                                raylib.DrawPixel(x - 1, y - 1, hex)
+                        end
+                end
+        raylib.EndDrawing()
+end
+			</pre>
+
+			<p>Now this is good enough for most things, but there are some things you should take into account when you are making an image viewer for INP files. First of all, there are no comments in the INI files. So <code>;</code> or <code>#</code> will not work within the files, so you cannot have something like <code>x1y1=0f0f0f ; A nice dark shade of grey</code>. The second thing about the files is that sections cannot be padded with spaces, so you cannot have <code>[ General ]</code> or <code>x1y1 = ff0000</code>. Not having spaces increases the simplicity of the INI parsing that needs to be done, since it filters out you having to take spaces into account, so you only have to worry about newlines (<code>\n</code>).</p>
+
+			<p>Anyways, that should be it for the normal talk. So here is a list of variables that can be found in the General section of an INP file.</p>
+
+			<ul style="list-style-type: disc;">
+				<li><code>width</code> - How wide the image is in pixels. Mandatory.</li>
+				<li><code>height</code> - How tall the image is in pixels. Mandatory.</li>
+				<li><code>background</code> - The color of the background if there are any missing pixels or transparency stuff. Optional.</li>
+				<li><code>alpha</code> - Enable with <code>alpha=1</code>. Enables the alpha part of the color hex, eg. <code>x1y1=ff0000ff</code>. Optional.</li>
+				<li><code>name</code> - The name of the image itself. Useful for artworks. Optional.</li>
+				<li><code>note</code> - A note for the image itself. Optional.</li>
+				<li><code>creator</code> - The creator of the image. Useful for art and photography. Optional.</li>
+				<li><code>date</code> - The creation date of the image or what the image is of. Useful for photography or art. It is a free-text field, meaning you can put whatever you want in there in whatever format you want. Optional.</li>
+				<li><code>location</code> - The location the image was taken. Useful for real life photos. Optional.</li>
+			</ul>
+		</div>
+		<div id="afterword">
+			<h2>Afterword</h2>
+
+			<p>Just some things that I wasn't sure where to put. One thing I realized while writing this spec was that the size of the images wouldn't be that great, since there's no compression to them. To keep simplicity in the format, I think it would be good for you to compress the images, then do something like <code>xzcat image.inp.xz | inpview -</code>. Just a thought to how you could do it. Oh yeah on the topic on viewers, it would probably be a good idea to have an option in your image viewer that lets you take in pictures from <code>stdin</code>, so you can do things like that for compression.</p>
+
+			<p>Some things that inspired me to make INP was, well INI files, but also other image formats such as <a href="https://en.wikipedia.org/wiki/X_PixMap">XPM</a> and <a href="https://en.wikipedia.org/wiki/Netpbm">PBM</a>, since they are also very simple image formats that use plain text to show pictures. Strangely, I kept thinking about the programming language <a href="https://en.wikipedia.org/wiki/Brainfuck">Brainf*ck</a>, since I heard that it was made to be as simple as possible to write a compiler/interpreter for, but really hard to write in. This analogy does not make sense for INP files, since they are easy to make themselves, and easy to make programs for.</p>
+
+			<p>If you are making an image viewer that uses this, if there are any missing pixels within the image itself, what I think you should do is warn the user, and still show the picture, but replace the missing pixels with bright pink ones, a la the <a href="https://developer.valvesoftware.com/wiki/Missing_content">Source Engine</a> and <a href="https://minecraft.wiki/w/Missing_textures_and_models#Missing_texture">Minecraft</a>. Another approach you could take is that you could randomly select one of the surrounding pixels around the missing pixel, and just copy it over to the missing one. Or you could just do nothing. I don't know, I'm not your dad, do as you want.</p>
+
+			<p>One last thing I want to say is that if you are making anything using this format, you should credit me either by name or link here. You can give credit to either my screen name, <a href="https://en.wikipedia.org/wiki/History_of_the_Berkeley_Software_Distribution#3BSD:~:text=3BSD%20was%20also%20alternatively%20called%20Virtual%20VAX%2FUNIX%20or%20VMUNIX%20%28for%20Virtual%20Memory%20Unix%29%2C%20and%20BSD%20kernel%20images%20were%20normally%20called%20%2Fvmunix%20until%204%2E4BSD">vmunix</a>, or my "real" name, <a href="https://phish.net/song/run-like-an-antelope/lyrics#:~:text=Marco%20Esquandolas">Marco Esquandolas</a>.</p>
+		</div>
+
+		<p><a href="/articles.html">Back to the articles listing</a></p>
+
+		<img src="/badges/apache2.gif"><img src="/badges/linux2.gif"><img src="/badges/poweredbybrains.gif"><br><img src="/badges/vim.png">
+	</body>
+</html>
