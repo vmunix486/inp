@@ -3,21 +3,8 @@
  * Uses stb_image.h (https://github.com/nothings/stb) for decoding, so it
  * reads whatever stb_image supports: PNG, JPEG, BMP, TGA, GIF, PSD, PIC.
  *
- * Build: gcc -O2 -o img2inp img2inp.c -lm
  * Usage: img2inp input.png output.inp [options]
- *
- * Options:
- *   --alpha              Force alpha channel on, even if the source has none.
- *   --no-alpha           Force alpha channel off (flattens onto white).
- *   --background=RRGGBB  Set the [General] background key to this color,
- *                         AND skip writing any pixel that exactly matches
- *                         it. Cuts file size for images with large flat
- *                         areas, at the cost of those pixels reading back
- *                         as "background" rather than an explicit value.
- *   --name=STRING         Sets General.name
- *   --creator=STRING      Sets General.creator
- *   --note=STRING         Sets General.note
- */
+*/
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -35,6 +22,8 @@ static void usage(const char *prog)
         "  --background=RRGGBB     set background + skip matching pixels\n"
         "  --colors=MODE           set color mode (16bit, 256color, 256gray,\n"
         "                             16color, 16gray, bw)\n"
+        "  --extract-palette       extract most common colors from image\n"
+        "                          (used with 256color/16color) (experimental)\n"
         "  --name=STRING           set General.name\n"
         "  --creator=STRING        set General.creator\n"
         "  --note=STRING           set General.note\n",
@@ -135,13 +124,100 @@ static const unsigned char vga_palette[256][3] = {
     {208,208,208},{218,218,218},{228,228,228},{238,238,238}
 };
 
-static int find_nearest(int r, int g, int b, int count)
+#define HTAB_SIZE 65536
+#define HTAB_MASK (HTAB_SIZE - 1)
+
+typedef struct {
+    unsigned int color;
+    int count;
+    int used;
+} HEntry;
+
+static HEntry htab[HTAB_SIZE];
+
+static unsigned int color_hash(unsigned int c)
+{
+    c = ((c >> 16) ^ c) * 0x45d9f3b;
+    c = ((c >> 16) ^ c);
+    return c & HTAB_MASK;
+}
+
+static void htab_insert(unsigned int color)
+{
+    unsigned int h = color_hash(color);
+    while (htab[h].used && htab[h].color != color) {
+        h = (h + 1) & HTAB_MASK;
+    }
+    if (!htab[h].used) {
+        htab[h].color = color;
+        htab[h].used = 1;
+        htab[h].count = 1;
+    } else {
+        htab[h].count++;
+    }
+}
+
+typedef struct {
+    unsigned int color;
+    int count;
+} ColorCount;
+
+static int compare_counts(const void *a, const void *b)
+{
+    const ColorCount *ca = (const ColorCount *)a;
+    const ColorCount *cb = (const ColorCount *)b;
+    return cb->count - ca->count;
+}
+
+static int extract_palette(unsigned char *img, int w, int h,
+                           unsigned char out_palette[][3], int max_colors)
+{
+    int i, n = w * h;
+    int total = 0;
+    ColorCount *counts;
+
+    counts = (ColorCount *)malloc(HTAB_SIZE * sizeof(ColorCount));
+    if (!counts) return 0;
+
+    memset(htab, 0, sizeof(htab));
+
+    for (i = 0; i < n; i++) {
+        unsigned int c = ((unsigned int)img[i*4+0] << 24) |
+                         ((unsigned int)img[i*4+1] << 16) |
+                         ((unsigned int)img[i*4+2] << 8) |
+                         (unsigned int)img[i*4+3];
+        htab_insert(c);
+    }
+
+    for (i = 0; i < HTAB_SIZE; i++) {
+        if (htab[i].used && total < HTAB_SIZE) {
+            counts[total].color = htab[i].color;
+            counts[total].count = htab[i].count;
+            total++;
+        }
+    }
+
+    qsort(counts, total, sizeof(ColorCount), compare_counts);
+
+    if (total > max_colors) total = max_colors;
+    for (i = 0; i < total; i++) {
+        out_palette[i][0] = (counts[i].color >> 24) & 0xff;
+        out_palette[i][1] = (counts[i].color >> 16) & 0xff;
+        out_palette[i][2] = (counts[i].color >> 8) & 0xff;
+    }
+
+    free(counts);
+    return total;
+}
+
+static int find_nearest(int r, int g, int b,
+                        const unsigned char palette[][3], int count)
 {
     int best = 0, best_d = 256*256*3, i;
     for (i = 0; i < count; i++) {
-        int dr = r - vga_palette[i][0];
-        int dg = g - vga_palette[i][1];
-        int db = b - vga_palette[i][2];
+        int dr = r - palette[i][0];
+        int dg = g - palette[i][1];
+        int db = b - palette[i][2];
         int d = dr*dr + dg*dg + db*db;
         if (d < best_d) { best_d = d; best = i; }
     }
@@ -154,7 +230,8 @@ static void clamp_pixel(int *v)
     if (*v > 255) *v = 255;
 }
 
-static void dither_palette(unsigned char *img, int w, int h, int pal_count)
+static void dither_palette(unsigned char *img, int w, int h,
+                           const unsigned char palette[][3], int pal_count)
 {
     int x, y, ch;
     int *buf = (int *)malloc((size_t)w * (size_t)h * 3 * sizeof(int));
@@ -174,11 +251,11 @@ static void dither_palette(unsigned char *img, int w, int h, int pal_count)
             int old[3], ni, err[3];
 
             for (ch = 0; ch < 3; ch++) { old[ch] = buf[bi+ch]; clamp_pixel(&old[ch]); }
-            ni = find_nearest(old[0], old[1], old[2], pal_count);
+            ni = find_nearest(old[0], old[1], old[2], palette, pal_count);
             for (ch = 0; ch < 3; ch++) {
-                err[ch] = old[ch] - (int)vga_palette[ni][ch];
-                buf[bi+ch] = (int)vga_palette[ni][ch];
-                img[si+ch] = vga_palette[ni][ch];
+                err[ch] = old[ch] - (int)palette[ni][ch];
+                buf[bi+ch] = (int)palette[ni][ch];
+                img[si+ch] = palette[ni][ch];
             }
 
             if (x+1 < w) { int i=bi+3; buf[i+0]+=err[0]*7/16; buf[i+1]+=err[1]*7/16; buf[i+2]+=err[2]*7/16; }
@@ -245,7 +322,7 @@ int main(int argc, char *argv[])
 {
     const char *in_path, *out_path;
     const char *bg_str, *name, *creator, *note, *colors_str;
-    int force_alpha, force_no_alpha, have_bg;
+    int force_alpha, force_no_alpha, have_bg, extract_palette_flag;
     unsigned char bg_r, bg_g, bg_b;
     int width, height, channels;
     unsigned char *img;
@@ -261,6 +338,7 @@ int main(int argc, char *argv[])
     out_path = argv[2];
     force_alpha = 0;
     force_no_alpha = 0;
+    extract_palette_flag = 0;
     bg_str = NULL;
     name = NULL;
     creator = NULL;
@@ -284,6 +362,8 @@ int main(int argc, char *argv[])
                 note = argv[i] + 7;
             } else if (strncmp(argv[i], "--colors=", 9) == 0) {
                 colors_str = argv[i] + 9;
+            } else if (strcmp(argv[i], "--extract-palette") == 0) {
+                extract_palette_flag = 1;
             } else {
                 fprintf(stderr, "img2inp: unknown option %s\n", argv[i]);
                 usage(argv[0]);
@@ -343,116 +423,130 @@ int main(int argc, char *argv[])
         use_alpha = 0;
     }
 
-    if (color_mode == MODE_256COLOR || color_mode == MODE_16COLOR) {
-        dither_palette(img, width, height, 256);
-    } else if (color_mode == MODE_256GRAY) {
-        dither_grayscale(img, width, height, 256);
-    } else if (color_mode == MODE_16GRAY) {
-        dither_grayscale(img, width, height, 16);
-    } else if (color_mode == MODE_BW) {
-        convert_bw(img, width, height);
-    }
+    {
+        const unsigned char (*pal)[3] = vga_palette;
+        int pal_count;
+        unsigned char ext_pal[256][3];
 
-    pixel_count = (long)width * (long)height;
-    if (pixel_count > 200000) {
-        fprintf(stderr,
-            "img2inp: warning: %ldx%ld = %ld pixels -> the .inp file will have "
-            "roughly that many lines. Consider piping the output through xz or "
-            "gzip (INP has no built-in compression).\n",
-            (long)width, (long)height, pixel_count);
-    }
+        pal_count = (color_mode == MODE_16COLOR) ? 16 : 256;
 
-    out = fopen(out_path, "wb");
-    if (!out) {
-        fprintf(stderr, "img2inp: could not open %s for writing\n", out_path);
-        stbi_image_free(img);
-        return 1;
-    }
-
-    fprintf(out, "[General]\n");
-    fprintf(out, "width=%d\n", width);
-    fprintf(out, "height=%d\n", height);
-    if (use_alpha) fprintf(out, "alpha=1\n");
-    if (color_mode == MODE_256COLOR) fprintf(out, "colors=256color\n");
-    else if (color_mode == MODE_256GRAY) fprintf(out, "colors=256gray\n");
-    else if (color_mode == MODE_16COLOR) fprintf(out, "colors=16color\n");
-    else if (color_mode == MODE_16GRAY) fprintf(out, "colors=16gray\n");
-    else if (color_mode == MODE_BW) fprintf(out, "colors=bw\n");
-    if (have_bg) fprintf(out, "background=%02x%02x%02x\n", bg_r, bg_g, bg_b);
-    if (name) fprintf(out, "name=%s\n", name);
-    if (creator) fprintf(out, "creator=%s\n", creator);
-    if (note) fprintf(out, "note=%s\n", note);
-
-    if (color_mode == MODE_256COLOR || color_mode == MODE_16COLOR) {
-        int pal_count = (color_mode == MODE_16COLOR) ? 16 : 256;
-        int pi;
-        fprintf(out, "\n[Palette]\n");
-        for (pi = 0; pi < pal_count; pi++) {
-            fprintf(out, "c%d=%02x%02x%02x\n", pi,
-                    vga_palette[pi][0], vga_palette[pi][1], vga_palette[pi][2]);
+        if (extract_palette_flag && (color_mode == MODE_256COLOR || color_mode == MODE_16COLOR)) {
+            int got = extract_palette(img, width, height, ext_pal, pal_count);
+            fprintf(stderr, "img2inp: extracted %d colors from image\n", got);
+            pal = ext_pal;
+            pal_count = got;
         }
-    }
 
-    fprintf(out, "\n[Picture]\n");
+        if (color_mode == MODE_256COLOR || color_mode == MODE_16COLOR) {
+            dither_palette(img, width, height, pal, pal_count);
+        } else if (color_mode == MODE_256GRAY) {
+            dither_grayscale(img, width, height, 256);
+        } else if (color_mode == MODE_16GRAY) {
+            dither_grayscale(img, width, height, 16);
+        } else if (color_mode == MODE_BW) {
+            convert_bw(img, width, height);
+        }
 
-    skipped = 0;
-    for (y = 1; y <= height; y++) {
-        for (x = 1; x <= width; x++) {
-            long idx;
-            unsigned char r, g, b, a;
+        pixel_count = (long)width * (long)height;
+        if (pixel_count > 200000) {
+            fprintf(stderr,
+                "img2inp: warning: %ldx%ld = %ld pixels -> the .inp file will have "
+                "roughly that many lines. Consider piping the output through xz or "
+                "gzip (INP has no built-in compression).\n",
+                (long)width, (long)height, pixel_count);
+        }
 
-            idx = ((long)(y - 1) * width + (x - 1)) * 4;
-            r = img[idx + 0];
-            g = img[idx + 1];
-            b = img[idx + 2];
-            a = img[idx + 3];
+        out = fopen(out_path, "wb");
+        if (!out) {
+            fprintf(stderr, "img2inp: could not open %s for writing\n", out_path);
+            stbi_image_free(img);
+            return 1;
+        }
 
-            if (have_bg && r == bg_r && g == bg_g && b == bg_b
-                && (!use_alpha || a == 255)) {
-                skipped++;
-                continue;
+        fprintf(out, "[General]\n");
+        fprintf(out, "width=%d\n", width);
+        fprintf(out, "height=%d\n", height);
+        if (use_alpha) fprintf(out, "alpha=1\n");
+        if (color_mode == MODE_256COLOR) fprintf(out, "colors=256color\n");
+        else if (color_mode == MODE_256GRAY) fprintf(out, "colors=256gray\n");
+        else if (color_mode == MODE_16COLOR) fprintf(out, "colors=16color\n");
+        else if (color_mode == MODE_16GRAY) fprintf(out, "colors=16gray\n");
+        else if (color_mode == MODE_BW) fprintf(out, "colors=bw\n");
+        if (have_bg) fprintf(out, "background=%02x%02x%02x\n", bg_r, bg_g, bg_b);
+        if (name) fprintf(out, "name=%s\n", name);
+        if (creator) fprintf(out, "creator=%s\n", creator);
+        if (note) fprintf(out, "note=%s\n", note);
+
+        if (color_mode == MODE_256COLOR || color_mode == MODE_16COLOR) {
+            int pi;
+            fprintf(out, "\n[Palette]\n");
+            for (pi = 0; pi < pal_count; pi++) {
+                fprintf(out, "c%d=%02x%02x%02x\n", pi,
+                        pal[pi][0], pal[pi][1], pal[pi][2]);
             }
+        }
 
-            switch (color_mode) {
-            case MODE_256COLOR:
-            case MODE_16COLOR: {
-                int ci = find_nearest(r, g, b, (color_mode == MODE_16COLOR) ? 16 : 256);
-                fprintf(out, "x%dy%d=%02x\n", x, y, ci);
-                break;
-            }
-            case MODE_256GRAY:
-            case MODE_16GRAY:
-                fprintf(out, "x%dy%d=%02x\n", x, y, r);
-                break;
-            case MODE_BW:
-                fprintf(out, "x%dy%d=%c\n", x, y, (r < 128) ? '0' : '1');
-                break;
-            default:
-                if (use_alpha) {
-                    fprintf(out, "x%dy%d=%02x%02x%02x%02x\n", x, y, r, g, b, a);
-                } else {
-                    fprintf(out, "x%dy%d=%02x%02x%02x\n", x, y, r, g, b);
+        fprintf(out, "\n[Picture]\n");
+
+        skipped = 0;
+        for (y = 1; y <= height; y++) {
+            for (x = 1; x <= width; x++) {
+                long idx;
+                unsigned char r, g, b, a;
+
+                idx = ((long)(y - 1) * width + (x - 1)) * 4;
+                r = img[idx + 0];
+                g = img[idx + 1];
+                b = img[idx + 2];
+                a = img[idx + 3];
+
+                if (have_bg && r == bg_r && g == bg_g && b == bg_b
+                    && (!use_alpha || a == 255)) {
+                    skipped++;
+                    continue;
                 }
-                break;
+
+                switch (color_mode) {
+                case MODE_256COLOR:
+                case MODE_16COLOR: {
+                    int ci = find_nearest(r, g, b, pal, pal_count);
+                    fprintf(out, "x%dy%d=%02x\n", x, y, ci);
+                    break;
+                }
+                case MODE_256GRAY:
+                case MODE_16GRAY:
+                    fprintf(out, "x%dy%d=%02x\n", x, y, r);
+                    break;
+                case MODE_BW:
+                    fprintf(out, "x%dy%d=%c\n", x, y, (r < 128) ? '0' : '1');
+                    break;
+                default:
+                    if (use_alpha) {
+                        fprintf(out, "x%dy%d=%02x%02x%02x%02x\n", x, y, r, g, b, a);
+                    } else {
+                        fprintf(out, "x%dy%d=%02x%02x%02x\n", x, y, r, g, b);
+                    }
+                    break;
+                }
             }
         }
+
+        fclose(out);
+
+        fprintf(stderr, "img2inp: wrote %s (%dx%d, %s", out_path, width, height,
+                (color_mode == MODE_256COLOR) ? "256color" :
+                (color_mode == MODE_256GRAY) ? "256gray" :
+                (color_mode == MODE_16COLOR) ? "16color" :
+                (color_mode == MODE_16GRAY) ? "16gray" :
+                (color_mode == MODE_BW) ? "bw" :
+                (use_alpha ? "RGBA" : "RGB"));
+        fprintf(stderr, ")");
+        if (skipped > 0) {
+            fprintf(stderr, ", skipped %d pixel(s) matching --background", skipped);
+        }
+        fprintf(stderr, "\n");
     }
 
-    fclose(out);
     stbi_image_free(img);
-
-    fprintf(stderr, "img2inp: wrote %s (%dx%d, %s", out_path, width, height,
-            (color_mode == MODE_256COLOR) ? "256color" :
-            (color_mode == MODE_256GRAY) ? "256gray" :
-            (color_mode == MODE_16COLOR) ? "16color" :
-            (color_mode == MODE_16GRAY) ? "16gray" :
-            (color_mode == MODE_BW) ? "bw" :
-            (use_alpha ? "RGBA" : "RGB"));
-    fprintf(stderr, ")");
-    if (skipped > 0) {
-        fprintf(stderr, ", skipped %d pixel(s) matching --background", skipped);
-    }
-    fprintf(stderr, "\n");
-
     return 0;
 }
