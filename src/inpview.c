@@ -403,123 +403,171 @@ static const char *decompress_cmd(const char *path)
     return NULL;
 }
 
-int main(int argc, char *argv[])
+/* Result of loading a single INP image. */
+typedef struct {
+    InpHeader hdr;
+    Uint8 *pixels;
+    int width, height;
+    int ok;
+} InpImage;
+
+/* Opens a file (with auto-decompress), reads and decodes it into pixels.
+ * Caller must free result.pixels when done. */
+static InpImage load_image(const char *path)
 {
+    InpImage img;
     FILE *fp;
     char *data;
     size_t data_len;
-    InpHeader hdr;
-    int have_bg;
-    Uint8 *pixels;
-    int i, missing;
-    SDL_Window *win;
-    SDL_Renderer *ren;
-    SDL_Texture *tex;
+    int have_bg, i, missing;
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <file.inp[.xz|.gz|.bz2|.lzma|.zst]|->\n", argv[0]);
-        return 1;
-    }
+    img.ok = 0;
+    img.pixels = NULL;
+    img.width = 0;
+    img.height = 0;
 
-    if (strcmp(argv[1], "-") == 0) {
+    if (strcmp(path, "-") == 0) {
         fp = stdin;
     } else {
-        const char *cmd = decompress_cmd(argv[1]);
+        const char *cmd = decompress_cmd(path);
         if (cmd) {
-            char buf[1024];
-            snprintf(buf, sizeof(buf), "%s '%s'", cmd, argv[1]);
-            fp = popen(buf, "r");
+            char cmdbuf[1024];
+            snprintf(cmdbuf, sizeof(cmdbuf), "%s '%s'", cmd, path);
+            fp = popen(cmdbuf, "r");
             if (!fp) {
-                fprintf(stderr, "inpview: could not run %s on %s\n", cmd, argv[1]);
-                return 1;
+                fprintf(stderr, "inpview: could not run %s on %s\n", cmd, path);
+                return img;
             }
         } else {
-            fp = fopen(argv[1], "rb");
+            fp = fopen(path, "rb");
             if (!fp) {
-                fprintf(stderr, "inpview: could not open %s\n", argv[1]);
-                return 1;
+                fprintf(stderr, "inpview: could not open %s\n", path);
+                return img;
             }
         }
     }
 
     data = slurp(fp, &data_len);
     if (fp == stdin) { /* leave stdin open */ }
-    else if (decompress_cmd(argv[1])) pclose(fp);
+    else if (decompress_cmd(path)) pclose(fp);
     else fclose(fp);
     if (!data) {
-        fprintf(stderr, "inpview: could not read input\n");
-        return 1;
+        fprintf(stderr, "inpview: could not read %s\n", path);
+        return img;
     }
 
-    hdr.width = 0;
-    hdr.height = 0;
-    hdr.alpha = 0;
-    hdr.colors = MODE_16BIT;
-    hdr.bg_r = 255; hdr.bg_g = 0; hdr.bg_b = 255; hdr.bg_a = 255; /* magenta */
-    hdr.palette_count = 0;
+    img.hdr.width = 0;
+    img.hdr.height = 0;
+    img.hdr.alpha = 0;
+    img.hdr.colors = MODE_16BIT;
+    img.hdr.bg_r = 255; img.hdr.bg_g = 0; img.hdr.bg_b = 255; img.hdr.bg_a = 255;
+    img.hdr.palette_count = 0;
     have_bg = 0;
 
-    init_vga_palette(hdr.palette);
+    init_vga_palette(img.hdr.palette);
+    scan_general(data, data_len, &img.hdr, &have_bg);
+    scan_palette(data, data_len, &img.hdr);
 
-    scan_general(data, data_len, &hdr, &have_bg);
-
-    scan_palette(data, data_len, &hdr);
-
-    if (hdr.colors == MODE_16COLOR && hdr.palette_count < 16) {
-        fprintf(stderr, "inpview: warning: 16color mode expects 16 palette entries (found %d), using defaults\n",
-                hdr.palette_count);
-        hdr.palette_count = 16;
+    if (img.hdr.colors == MODE_16COLOR && img.hdr.palette_count < 16) {
+        img.hdr.palette_count = 16;
     }
-    if (hdr.colors == MODE_256COLOR && hdr.palette_count < 256) {
-        fprintf(stderr, "inpview: warning: 256color mode expects 256 palette entries (found %d), using defaults\n",
-                hdr.palette_count);
-        hdr.palette_count = 256;
-    }
-    if ((hdr.colors == MODE_16BIT || hdr.colors == MODE_256GRAY
-         || hdr.colors == MODE_16GRAY || hdr.colors == MODE_BW)
-        && hdr.palette_count > 0) {
-        fprintf(stderr, "inpview: warning: [Palette] section ignored for this color mode\n");
+    if (img.hdr.colors == MODE_256COLOR && img.hdr.palette_count < 256) {
+        img.hdr.palette_count = 256;
     }
 
-    if (hdr.width <= 0 || hdr.height <= 0) {
-        fprintf(stderr, "inpview: invalid or missing width/height\n");
+    if (img.hdr.width <= 0 || img.hdr.height <= 0) {
+        fprintf(stderr, "inpview: %s: invalid or missing width/height\n", path);
         free(data);
-        return 1;
+        return img;
     }
 
-    pixels = (Uint8 *)malloc((size_t)hdr.width * (size_t)hdr.height * 4);
-    if (!pixels) {
+    img.pixels = (Uint8 *)malloc((size_t)img.hdr.width * (size_t)img.hdr.height * 4);
+    if (!img.pixels) {
         fprintf(stderr, "inpview: out of memory\n");
         free(data);
-        return 1;
+        return img;
     }
-    for (i = 0; i < hdr.width * hdr.height; i++) {
-        pixels[i * 4 + 0] = hdr.bg_r;
-        pixels[i * 4 + 1] = hdr.bg_g;
-        pixels[i * 4 + 2] = hdr.bg_b;
-        pixels[i * 4 + 3] = hdr.bg_a;
+    for (i = 0; i < img.hdr.width * img.hdr.height; i++) {
+        img.pixels[i * 4 + 0] = img.hdr.bg_r;
+        img.pixels[i * 4 + 1] = img.hdr.bg_g;
+        img.pixels[i * 4 + 2] = img.hdr.bg_b;
+        img.pixels[i * 4 + 3] = img.hdr.bg_a;
     }
 
-    missing = fill_pixels(data, data_len, &hdr, pixels);
+    missing = fill_pixels(data, data_len, &img.hdr, img.pixels);
     free(data);
 
     if (missing > 0) {
-        fprintf(stderr, "inpview: warning: %d missing pixel(s), filled with %s\n",
-                missing, have_bg ? "the configured background color" : "magenta");
+        fprintf(stderr, "inpview: warning: %s: %d missing pixel(s), filled with %s\n",
+                path, missing, have_bg ? "the configured background color" : "magenta");
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        fprintf(stderr, "inpview: SDL_Init failed: %s\n", SDL_GetError());
-        free(pixels);
+    img.width = img.hdr.width;
+    img.height = img.hdr.height;
+    img.ok = 1;
+    return img;
+}
+
+/* Sets the window title to "inpview: path (3/15)". */
+static void update_title(SDL_Window *win, const char *path, int idx, int total)
+{
+    char title[512];
+    if (total > 1)
+        snprintf(title, sizeof(title), "inpview: %s (%d/%d)", path, idx + 1, total);
+    else
+        snprintf(title, sizeof(title), "inpview: %s", path);
+    SDL_SetWindowTitle(win, title);
+}
+
+int main(int argc, char *argv[])
+{
+    int file_count, slideshow_ms, cur;
+    const char *files[4096];
+    InpImage img;
+    SDL_Window *win;
+    SDL_Renderer *ren;
+    SDL_Texture *tex;
+    int running, dragging, drag_x, drag_y;
+    float zoom, pan_x, pan_y;
+    Uint32 last_advance;
+    int i;
+
+    file_count = 0;
+    slideshow_ms = 0;
+
+    for (i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--slideshow=", 12) == 0) {
+            slideshow_ms = atoi(argv[i] + 12) * 1000;
+            if (slideshow_ms < 0) slideshow_ms = 0;
+        } else {
+            if (file_count >= 4096) {
+                fprintf(stderr, "inpview: too many files\n");
+                return 1;
+            }
+            files[file_count++] = argv[i];
+        }
+    }
+
+    if (file_count == 0) {
+        fprintf(stderr, "usage: %s [--slideshow=N] <files...>\n", argv[0]);
         return 1;
     }
 
-    win = SDL_CreateWindow("INP image viewer",
+    img = load_image(files[0]);
+    if (!img.ok) return 1;
+
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        fprintf(stderr, "inpview: SDL_Init failed: %s\n", SDL_GetError());
+        free(img.pixels);
+        return 1;
+    }
+
+    win = SDL_CreateWindow("inpview",
                             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                            hdr.width, hdr.height, SDL_WINDOW_RESIZABLE);
+                            img.width, img.height, SDL_WINDOW_RESIZABLE);
     if (!win) {
         fprintf(stderr, "inpview: SDL_CreateWindow failed: %s\n", SDL_GetError());
-        free(pixels);
+        free(img.pixels);
         SDL_Quit();
         return 1;
     }
@@ -528,147 +576,220 @@ int main(int argc, char *argv[])
     if (!ren) ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
     if (!ren) {
         fprintf(stderr, "inpview: SDL_CreateRenderer failed: %s\n", SDL_GetError());
-        free(pixels);
+        free(img.pixels);
         SDL_DestroyWindow(win);
         SDL_Quit();
         return 1;
     }
 
     tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
-                             SDL_TEXTUREACCESS_STATIC, hdr.width, hdr.height);
+                             SDL_TEXTUREACCESS_STATIC, img.width, img.height);
     if (!tex) {
         fprintf(stderr, "inpview: SDL_CreateTexture failed: %s\n", SDL_GetError());
-        free(pixels);
+        free(img.pixels);
         SDL_DestroyRenderer(ren);
         SDL_DestroyWindow(win);
         SDL_Quit();
         return 1;
     }
 
-    SDL_UpdateTexture(tex, NULL, pixels, hdr.width * 4);
-    free(pixels);
+    SDL_UpdateTexture(tex, NULL, img.pixels, img.width * 4);
+    free(img.pixels);
+    img.pixels = NULL;
 
-    {
-        int running;
+    update_title(win, files[0], 0, file_count);
+
+    zoom = 1.0f;
+    pan_x = 0.0f;
+    pan_y = 0.0f;
+    dragging = 0;
+    drag_x = 0;
+    drag_y = 0;
+    cur = 0;
+    last_advance = SDL_GetTicks();
+    running = 1;
+
+    while (running) {
+        int win_w, win_h;
+        int base_w, base_h;
         SDL_Event ev;
-        float zoom, pan_x, pan_y;
-        int dragging, drag_x, drag_y;
 
-        zoom = 1.0f;
-        pan_x = 0.0f;
-        pan_y = 0.0f;
-        dragging = 0;
-        drag_x = 0;
-        drag_y = 0;
-        running = 1;
-        while (running) {
-            int win_w, win_h;
-            int base_w, base_h;
+        SDL_GetRendererOutputSize(ren, &win_w, &win_h);
 
-            SDL_GetRendererOutputSize(ren, &win_w, &win_h);
+        if ((float)img.width / img.height > (float)win_w / win_h) {
+            base_w = win_w;
+            base_h = (int)((float)win_w * img.height / img.width);
+        } else {
+            base_h = win_h;
+            base_w = (int)((float)win_h * img.width / img.height);
+        }
 
-            if ((float)hdr.width / hdr.height > (float)win_w / win_h) {
-                base_w = win_w;
-                base_h = (int)((float)win_w * hdr.height / hdr.width);
-            } else {
-                base_h = win_h;
-                base_w = (int)((float)win_h * hdr.width / hdr.height);
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) running = 0;
+            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) running = 0;
+            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_F11) {
+                Uint32 flags = SDL_GetWindowFlags(win);
+                if (flags & SDL_WINDOW_FULLSCREEN_DESKTOP)
+                    SDL_SetWindowFullscreen(win, 0);
+                else
+                    SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
+            }
+            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_0) {
+                zoom = 1.0f;
+                pan_x = 0.0f;
+                pan_y = 0.0f;
             }
 
-            while (SDL_PollEvent(&ev)) {
-                if (ev.type == SDL_QUIT) running = 0;
-                if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) running = 0;
-                if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_F11) {
-                    Uint32 flags = SDL_GetWindowFlags(win);
-                    if (flags & SDL_WINDOW_FULLSCREEN_DESKTOP)
-                        SDL_SetWindowFullscreen(win, 0);
-                    else
-                        SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
+            /* gallery navigation */
+            if (ev.type == SDL_KEYDOWN && file_count > 1) {
+                int want = -1;
+                if (ev.key.keysym.sym == SDLK_RIGHT || ev.key.keysym.sym == SDLK_SPACE)
+                    want = (cur + 1) % file_count;
+                else if (ev.key.keysym.sym == SDLK_LEFT)
+                    want = (cur - 1 + file_count) % file_count;
+                else if (ev.key.keysym.sym == SDLK_HOME)
+                    want = 0;
+                else if (ev.key.keysym.sym == SDLK_END)
+                    want = file_count - 1;
+
+                if (want >= 0 && want != cur) {
+                    InpImage next;
+                    next = load_image(files[want]);
+                    if (next.ok) {
+                        SDL_DestroyTexture(tex);
+                        free(img.pixels);
+                        img = next;
+                        tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
+                                                 SDL_TEXTUREACCESS_STATIC, img.width, img.height);
+                        if (!tex) {
+                            fprintf(stderr, "inpview: SDL_CreateTexture failed: %s\n", SDL_GetError());
+                            running = 0;
+                            break;
+                        }
+                        SDL_UpdateTexture(tex, NULL, img.pixels, img.width * 4);
+                        free(img.pixels);
+                        img.pixels = NULL;
+                        cur = want;
+                        zoom = 1.0f;
+                        pan_x = 0.0f;
+                        pan_y = 0.0f;
+                        last_advance = SDL_GetTicks();
+                        update_title(win, files[cur], cur, file_count);
+                    }
                 }
-                if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_0) {
+            }
+
+            if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+                dragging = 1;
+                drag_x = ev.button.x;
+                drag_y = ev.button.y;
+            }
+            if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+                dragging = 0;
+            }
+            if (ev.type == SDL_MOUSEMOTION && dragging) {
+                pan_x += (float)(ev.motion.x - drag_x);
+                pan_y += (float)(ev.motion.y - drag_y);
+                drag_x = ev.motion.x;
+                drag_y = ev.motion.y;
+            }
+
+            if (ev.type == SDL_MOUSEWHEEL || ev.type == SDL_KEYDOWN) {
+                float new_zoom;
+                int mx, my;
+                int dst_w_now, dst_h_now;
+                int base_x, base_y;
+                float img_fx, img_fy;
+                int new_dst_w, new_dst_h, new_base_x, new_base_y;
+
+                if (ev.type == SDL_MOUSEWHEEL) {
+                    new_zoom = (ev.wheel.y > 0) ? zoom * 1.1f : zoom / 1.1f;
+                    SDL_GetMouseState(&mx, &my);
+                } else if (ev.key.keysym.sym == SDLK_EQUALS) {
+                    new_zoom = zoom * 1.25f;
+                    mx = win_w / 2;
+                    my = win_h / 2;
+                } else if (ev.key.keysym.sym == SDLK_MINUS) {
+                    new_zoom = zoom / 1.25f;
+                    mx = win_w / 2;
+                    my = win_h / 2;
+                } else {
+                    continue;
+                }
+
+                if (new_zoom < 0.05f) new_zoom = 0.05f;
+                if (new_zoom > 50.0f) new_zoom = 50.0f;
+
+                dst_w_now = (int)((float)base_w * zoom);
+                dst_h_now = (int)((float)base_h * zoom);
+                base_x = (win_w - dst_w_now) / 2;
+                base_y = (win_h - dst_h_now) / 2;
+
+                img_fx = (float)(mx - base_x - (int)pan_x) / (float)dst_w_now;
+                img_fy = (float)(my - base_y - (int)pan_y) / (float)dst_h_now;
+
+                new_dst_w = (int)((float)base_w * new_zoom);
+                new_dst_h = (int)((float)base_h * new_zoom);
+                new_base_x = (win_w - new_dst_w) / 2;
+                new_base_y = (win_h - new_dst_h) / 2;
+
+                pan_x = (float)(mx - new_base_x) - img_fx * (float)new_dst_w;
+                pan_y = (float)(my - new_base_y) - img_fy * (float)new_dst_h;
+
+                zoom = new_zoom;
+            }
+        }
+
+        /* slideshow auto-advance */
+        if (slideshow_ms > 0 && file_count > 1 && running) {
+            Uint32 now = SDL_GetTicks();
+            if (now - last_advance >= (Uint32)slideshow_ms) {
+                int want = (cur + 1) % file_count;
+                InpImage next;
+                next = load_image(files[want]);
+                if (next.ok) {
+                    SDL_DestroyTexture(tex);
+                    free(img.pixels);
+                    img = next;
+                    tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
+                                             SDL_TEXTUREACCESS_STATIC, img.width, img.height);
+                    if (!tex) {
+                        fprintf(stderr, "inpview: SDL_CreateTexture failed: %s\n", SDL_GetError());
+                        running = 0;
+                        break;
+                    }
+                    SDL_UpdateTexture(tex, NULL, img.pixels, img.width * 4);
+                    free(img.pixels);
+                    img.pixels = NULL;
+                    cur = want;
                     zoom = 1.0f;
                     pan_x = 0.0f;
                     pan_y = 0.0f;
-                }
-
-                if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
-                    dragging = 1;
-                    drag_x = ev.button.x;
-                    drag_y = ev.button.y;
-                }
-                if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
-                    dragging = 0;
-                }
-                if (ev.type == SDL_MOUSEMOTION && dragging) {
-                    pan_x += (float)(ev.motion.x - drag_x);
-                    pan_y += (float)(ev.motion.y - drag_y);
-                    drag_x = ev.motion.x;
-                    drag_y = ev.motion.y;
-                }
-
-                if (ev.type == SDL_MOUSEWHEEL || ev.type == SDL_KEYDOWN) {
-                    float new_zoom;
-                    int mx, my;
-                    int dst_w_now, dst_h_now;
-                    int base_x, base_y;
-                    float img_fx, img_fy;
-                    int new_dst_w, new_dst_h, new_base_x, new_base_y;
-
-                    if (ev.type == SDL_MOUSEWHEEL) {
-                        new_zoom = (ev.wheel.y > 0) ? zoom * 1.1f : zoom / 1.1f;
-                        SDL_GetMouseState(&mx, &my);
-                    } else if (ev.key.keysym.sym == SDLK_EQUALS) {
-                        new_zoom = zoom * 1.25f;
-                        mx = win_w / 2;
-                        my = win_h / 2;
-                    } else if (ev.key.keysym.sym == SDLK_MINUS) {
-                        new_zoom = zoom / 1.25f;
-                        mx = win_w / 2;
-                        my = win_h / 2;
-                    } else {
-                        continue;
-                    }
-
-                    if (new_zoom < 0.05f) new_zoom = 0.05f;
-                    if (new_zoom > 50.0f) new_zoom = 50.0f;
-
-                    dst_w_now = (int)((float)base_w * zoom);
-                    dst_h_now = (int)((float)base_h * zoom);
-                    base_x = (win_w - dst_w_now) / 2;
-                    base_y = (win_h - dst_h_now) / 2;
-
-                    img_fx = (float)(mx - base_x - (int)pan_x) / (float)dst_w_now;
-                    img_fy = (float)(my - base_y - (int)pan_y) / (float)dst_h_now;
-
-                    new_dst_w = (int)((float)base_w * new_zoom);
-                    new_dst_h = (int)((float)base_h * new_zoom);
-                    new_base_x = (win_w - new_dst_w) / 2;
-                    new_base_y = (win_h - new_dst_h) / 2;
-
-                    pan_x = (float)(mx - new_base_x) - img_fx * (float)new_dst_w;
-                    pan_y = (float)(my - new_base_y) - img_fy * (float)new_dst_h;
-
-                    zoom = new_zoom;
+                    last_advance = now;
+                    update_title(win, files[cur], cur, file_count);
+                } else {
+                    last_advance = now;
                 }
             }
-            {
-                int dst_w, dst_h;
-                SDL_Rect dst;
-
-                dst_w = (int)((float)base_w * zoom);
-                dst_h = (int)((float)base_h * zoom);
-
-                dst.x = (win_w - dst_w) / 2 + (int)pan_x;
-                dst.y = (win_h - dst_h) / 2 + (int)pan_y;
-                dst.w = dst_w;
-                dst.h = dst_h;
-
-                SDL_RenderClear(ren);
-                SDL_RenderCopy(ren, tex, NULL, &dst);
-                SDL_RenderPresent(ren);
-            }
-            SDL_Delay(16);
         }
+
+        {
+            int dst_w, dst_h;
+            SDL_Rect dst;
+
+            dst_w = (int)((float)base_w * zoom);
+            dst_h = (int)((float)base_h * zoom);
+
+            dst.x = (win_w - dst_w) / 2 + (int)pan_x;
+            dst.y = (win_h - dst_h) / 2 + (int)pan_y;
+            dst.w = dst_w;
+            dst.h = dst_h;
+
+            SDL_RenderClear(ren);
+            SDL_RenderCopy(ren, tex, NULL, &dst);
+            SDL_RenderPresent(ren);
+        }
+        SDL_Delay(16);
     }
 
     SDL_DestroyTexture(tex);

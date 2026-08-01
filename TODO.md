@@ -1,7 +1,6 @@
 # TODO
 
  - Add support for more platforms
- - Add gallery support
  - Add option to `img2inp` to randomize the color palette. Unserious; just for goofs and gags.
 
 ## Platforms
