@@ -523,9 +523,30 @@ int main(int argc, char *argv[])
     {
         int running;
         SDL_Event ev;
+        float zoom, pan_x, pan_y;
+        int dragging, drag_x, drag_y;
 
+        zoom = 1.0f;
+        pan_x = 0.0f;
+        pan_y = 0.0f;
+        dragging = 0;
+        drag_x = 0;
+        drag_y = 0;
         running = 1;
         while (running) {
+            int win_w, win_h;
+            int base_w, base_h;
+
+            SDL_GetRendererOutputSize(ren, &win_w, &win_h);
+
+            if ((float)hdr.width / hdr.height > (float)win_w / win_h) {
+                base_w = win_w;
+                base_h = (int)((float)win_w * hdr.height / hdr.width);
+            } else {
+                base_h = win_h;
+                base_w = (int)((float)win_h * hdr.width / hdr.height);
+            }
+
             while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_QUIT) running = 0;
                 if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) running = 0;
@@ -536,24 +557,81 @@ int main(int argc, char *argv[])
                     else
                         SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
                 }
+                if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_0) {
+                    zoom = 1.0f;
+                    pan_x = 0.0f;
+                    pan_y = 0.0f;
+                }
+
+                if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+                    dragging = 1;
+                    drag_x = ev.button.x;
+                    drag_y = ev.button.y;
+                }
+                if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+                    dragging = 0;
+                }
+                if (ev.type == SDL_MOUSEMOTION && dragging) {
+                    pan_x += (float)(ev.motion.x - drag_x);
+                    pan_y += (float)(ev.motion.y - drag_y);
+                    drag_x = ev.motion.x;
+                    drag_y = ev.motion.y;
+                }
+
+                if (ev.type == SDL_MOUSEWHEEL || ev.type == SDL_KEYDOWN) {
+                    float new_zoom;
+                    int mx, my;
+                    int dst_w_now, dst_h_now;
+                    int base_x, base_y;
+                    float img_fx, img_fy;
+                    int new_dst_w, new_dst_h, new_base_x, new_base_y;
+
+                    if (ev.type == SDL_MOUSEWHEEL) {
+                        new_zoom = (ev.wheel.y > 0) ? zoom * 1.1f : zoom / 1.1f;
+                        SDL_GetMouseState(&mx, &my);
+                    } else if (ev.key.keysym.sym == SDLK_EQUALS) {
+                        new_zoom = zoom * 1.25f;
+                        mx = win_w / 2;
+                        my = win_h / 2;
+                    } else if (ev.key.keysym.sym == SDLK_MINUS) {
+                        new_zoom = zoom / 1.25f;
+                        mx = win_w / 2;
+                        my = win_h / 2;
+                    } else {
+                        continue;
+                    }
+
+                    if (new_zoom < 0.05f) new_zoom = 0.05f;
+                    if (new_zoom > 50.0f) new_zoom = 50.0f;
+
+                    dst_w_now = (int)((float)base_w * zoom);
+                    dst_h_now = (int)((float)base_h * zoom);
+                    base_x = (win_w - dst_w_now) / 2;
+                    base_y = (win_h - dst_h_now) / 2;
+
+                    img_fx = (float)(mx - base_x - (int)pan_x) / (float)dst_w_now;
+                    img_fy = (float)(my - base_y - (int)pan_y) / (float)dst_h_now;
+
+                    new_dst_w = (int)((float)base_w * new_zoom);
+                    new_dst_h = (int)((float)base_h * new_zoom);
+                    new_base_x = (win_w - new_dst_w) / 2;
+                    new_base_y = (win_h - new_dst_h) / 2;
+
+                    pan_x = (float)(mx - new_base_x) - img_fx * (float)new_dst_w;
+                    pan_y = (float)(my - new_base_y) - img_fy * (float)new_dst_h;
+
+                    zoom = new_zoom;
+                }
             }
             {
-                int win_w, win_h;
                 int dst_w, dst_h;
                 SDL_Rect dst;
 
-                SDL_GetRendererOutputSize(ren, &win_w, &win_h);
+                dst_w = (int)((float)base_w * zoom);
+                dst_h = (int)((float)base_h * zoom);
 
-                if ((float)hdr.width / hdr.height > (float)win_w / win_h) {
-                    dst_w = win_w;
-                    dst_h = (int)((float)win_w * hdr.height / hdr.width);
-                } else {
-                    dst_h = win_h;
-                    dst_w = (int)((float)win_h * hdr.width / hdr.height);
-                }
-
-                dst.x = (win_w - dst_w) / 2;
-                dst.y = (win_h - dst_h) / 2;
+                dst.x = (win_w - dst_w) / 2 + (int)pan_x;
+                dst.y = (win_h - dst_h) / 2 + (int)pan_y;
                 dst.w = dst_w;
                 dst.h = dst_h;
 
