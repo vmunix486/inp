@@ -3,7 +3,6 @@
  - Add support for more platforms
  - Add gallery support
  - Add option to `img2inp` to randomize the color palette. Unserious; just for goofs and gags.
- - Add fullscreen support to SDL2 viewer
  - Add zooming to `inpview`
 
 ## Platforms

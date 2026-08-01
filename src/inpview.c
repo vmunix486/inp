@@ -529,6 +529,13 @@ int main(int argc, char *argv[])
             while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_QUIT) running = 0;
                 if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) running = 0;
+                if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_F11) {
+                    Uint32 flags = SDL_GetWindowFlags(win);
+                    if (flags & SDL_WINDOW_FULLSCREEN_DESKTOP)
+                        SDL_SetWindowFullscreen(win, 0);
+                    else
+                        SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
+                }
             }
             {
                 int win_w, win_h;
