@@ -1,6 +1,6 @@
 /* inpview.c -- reference viewer for the INP image format (INI-based images)
- * Spec:  https://slow.c2dthinkcentre.com/articles/inp.html
  * Usage: inpview image.inp
+ *        inpview image.inp.xz        (auto-decompresses)
  *        xzcat image.inp.xz | inpview -
  *
  * Written in strict C89: all declarations sit at the top of their block.
@@ -388,6 +388,21 @@ static int fill_pixels(const char *data, size_t data_len, const InpHeader *hdr, 
     return missing;
 }
 
+/* Returns the decompression command for a given file extension, or NULL
+ * if the file is not recognized as compressed. */
+static const char *decompress_cmd(const char *path)
+{
+    size_t len = strlen(path);
+
+    if (len > 3 && strcmp(path + len - 3, ".xz") == 0)    return "xzcat";
+    if (len > 3 && strcmp(path + len - 3, ".gz") == 0)    return "gzcat";
+    if (len > 4 && strcmp(path + len - 4, ".bz2") == 0)   return "bzcat";
+    if (len > 5 && strcmp(path + len - 5, ".lzma") == 0)  return "xzcat";
+    if (len > 4 && strcmp(path + len - 4, ".zst") == 0)   return "zstdcat";
+    if (len > 2 && strcmp(path + len - 2, ".Z") == 0)     return "zcat";
+    return NULL;
+}
+
 int main(int argc, char *argv[])
 {
     FILE *fp;
@@ -402,22 +417,35 @@ int main(int argc, char *argv[])
     SDL_Texture *tex;
 
     if (argc != 2) {
-        fprintf(stderr, "usage: %s <file.inp|->\n", argv[0]);
+        fprintf(stderr, "usage: %s <file.inp[.xz|.gz|.bz2|.lzma|.zst]|->\n", argv[0]);
         return 1;
     }
 
     if (strcmp(argv[1], "-") == 0) {
         fp = stdin;
     } else {
-        fp = fopen(argv[1], "rb");
-        if (!fp) {
-            fprintf(stderr, "inpview: could not open %s\n", argv[1]);
-            return 1;
+        const char *cmd = decompress_cmd(argv[1]);
+        if (cmd) {
+            char buf[1024];
+            snprintf(buf, sizeof(buf), "%s '%s'", cmd, argv[1]);
+            fp = popen(buf, "r");
+            if (!fp) {
+                fprintf(stderr, "inpview: could not run %s on %s\n", cmd, argv[1]);
+                return 1;
+            }
+        } else {
+            fp = fopen(argv[1], "rb");
+            if (!fp) {
+                fprintf(stderr, "inpview: could not open %s\n", argv[1]);
+                return 1;
+            }
         }
     }
 
     data = slurp(fp, &data_len);
-    if (fp != stdin) fclose(fp);
+    if (fp == stdin) { /* leave stdin open */ }
+    else if (decompress_cmd(argv[1])) pclose(fp);
+    else fclose(fp);
     if (!data) {
         fprintf(stderr, "inpview: could not read input\n");
         return 1;
