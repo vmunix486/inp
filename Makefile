@@ -1,17 +1,26 @@
 CC = cc
 CFLAGS = -Ofast -flto
 
-all: img2inp inpview
+all: img2inp inpview-sdl2 inpview-x11
 
 inp.o: src/inp.c src/inp.h
 	$(CC) $(CFLAGS) -c src/inp.c -o inp.o
 
-inpview.o: src/inpview.c src/inp.h
-	$(CC) $(CFLAGS) $(shell sdl2-config --cflags) -c src/inpview.c -o inpview.o
+# SDL2 frontend
+inpview-sdl2.o: src/inpview-sdl2.c src/inp.h
+	$(CC) $(CFLAGS) $(shell sdl2-config --cflags) -c src/inpview-sdl2.c -o inpview-sdl2.o
 
-inpview: inp.o inpview.o
-	$(CC) $(CFLAGS) inp.o inpview.o -o inpview $(shell sdl2-config --libs)
+inpview-sdl2: inp.o inpview-sdl2.o
+	$(CC) $(CFLAGS) inp.o inpview-sdl2.o -o inpview-sdl2 $(shell sdl2-config --libs)
 
+# X11/Xlib frontend
+inpview-x11.o: src/inpview-x11.c src/inp.h
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags x11) -c src/inpview-x11.c -o inpview-x11.o
+
+inpview-x11: inp.o inpview-x11.o
+	$(CC) $(CFLAGS) inp.o inpview-x11.o -o inpview-x11 $(shell pkg-config --libs x11)
+
+# Converter
 img2inp:
 	$(CC) $(CFLAGS) -Isrc src/img2inp.c -o img2inp -lm
 
@@ -21,4 +30,4 @@ update:
 	cd src && wget https://github.com/nothings/stb/raw/refs/heads/master/stb_image.h
 
 clean:
-	rm -f img2inp inpview inp.o inpview.o
+	rm -f img2inp inpview-sdl2 inpview-x11 inp.o inpview-sdl2.o inpview-x11.o

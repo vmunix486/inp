@@ -30,6 +30,10 @@ extern "C" {
 typedef unsigned char Uint8;
 #endif
 
+#ifndef Uint32
+typedef unsigned int Uint32;
+#endif
+
 /* Color modes (stored in InpHeader.colors). */
 enum {
     INP_MODE_16BIT,
