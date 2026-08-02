@@ -366,6 +366,7 @@ static int fill_pixels(const char *data, size_t data_len, const InpHeader *hdr, 
     return missing;
 }
 
+#ifndef __EMSCRIPTEN__
 static const char *decompress_cmd(const char *path)
 {
     size_t len = strlen(path);
@@ -378,6 +379,7 @@ static const char *decompress_cmd(const char *path)
     if (len > 2 && strcmp(path + len - 2, ".Z") == 0)     return "zcat";
     return NULL;
 }
+#endif /* !__EMSCRIPTEN__ */
 
 /* ------------------------------------------------------------------ */
 /* Public API                                                          */
@@ -399,6 +401,7 @@ InpImage inp_load(const char *path)
     if (strcmp(path, "-") == 0) {
         fp = stdin;
     } else {
+#ifndef __EMSCRIPTEN__
         const char *cmd = decompress_cmd(path);
         if (cmd) {
             char cmdbuf[1024];
@@ -408,7 +411,9 @@ InpImage inp_load(const char *path)
                 fprintf(stderr, "inp: could not run %s on %s\n", cmd, path);
                 return img;
             }
-        } else {
+        } else
+#endif /* !__EMSCRIPTEN__ */
+        {
             fp = fopen(path, "rb");
             if (!fp) {
                 fprintf(stderr, "inp: could not open %s\n", path);
@@ -419,8 +424,12 @@ InpImage inp_load(const char *path)
 
     data = slurp(fp, &data_len);
     if (fp == stdin) { /* leave stdin open */ }
+#ifdef __EMSCRIPTEN__
+    else fclose(fp);
+#else
     else if (decompress_cmd(path)) pclose(fp);
     else fclose(fp);
+#endif /* __EMSCRIPTEN__ */
     if (!data) {
         fprintf(stderr, "inp: could not read %s\n", path);
         return img;

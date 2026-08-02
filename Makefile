@@ -1,5 +1,7 @@
 CC = cc
 CFLAGS = -Ofast -flto
+EMCC = $(HOME)/emsdk/upstream/emscripten/emcc
+EMCCFLAGS = -O3 -ffast-math -flto
 
 all: img2inp inpview-sdl2 inpview-x11
 
@@ -24,6 +26,10 @@ inpview-x11: inp.o inpview-x11.o
 img2inp:
 	$(CC) $(CFLAGS) -Isrc src/img2inp.c -o img2inp -lm
 
+# Emscripten/WebAssembly
+inpview-wasm: src/inp.c src/inpview-sdl2.c src/inp.h
+	$(EMCC) $(EMCCFLAGS) -s USE_SDL=2 -s ALLOW_MEMORY_GROWTH=1 -Isrc src/inp.c src/inpview-sdl2.c -o inpview-wasm.html -lm
+
 update:
 	rm -fv docs/inp.html src/stb_image.h
 	cd docs && wget http://slow.c2dthinkcentre.com/articles/inp.html
@@ -31,3 +37,4 @@ update:
 
 clean:
 	rm -f img2inp inpview-sdl2 inpview-x11 inp.o inpview-sdl2.o inpview-x11.o
+	rm -f inpview-wasm.html inpview-wasm.js inpview-wasm.wasm
