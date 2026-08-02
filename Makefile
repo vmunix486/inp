@@ -27,8 +27,8 @@ img2inp:
 	$(CC) $(CFLAGS) -Isrc src/img2inp.c -o img2inp -lm
 
 # Emscripten/WebAssembly
-inpview-wasm: src/inp.c src/inpview-sdl2.c src/inp.h
-	$(EMCC) $(EMCCFLAGS) -s USE_SDL=2 -s ALLOW_MEMORY_GROWTH=1 -Isrc src/inp.c src/inpview-sdl2.c -o inpview-wasm.html -lm
+inpview-wasm: src/inp.c src/inpview-sdl2.c src/inp.h shell.html
+	$(EMCC) $(EMCCFLAGS) -s USE_SDL=2 -s ALLOW_MEMORY_GROWTH=1 --shell-file shell.html -Isrc src/inp.c src/inpview-sdl2.c -o inpview-wasm.html -lm
 
 update:
 	rm -fv docs/inp.html src/stb_image.h
